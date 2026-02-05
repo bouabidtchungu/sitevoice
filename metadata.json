@@ -1,0 +1,7 @@
+{
+  "name": "SiteVoice",
+  "description": "Transform your website into a living, interactive voice presence that speaks to visitors exactly like you would.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
