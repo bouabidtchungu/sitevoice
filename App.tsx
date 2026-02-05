@@ -24,6 +24,7 @@ const App: React.FC = () => {
   const chatSession = useRef<Chat | null>(null);
   const transcriptionBuffer = useRef<{ user: string; model: string }>({ user: '', model: '' });
   const scrollRef = useRef<HTMLDivElement>(null);
+  const textAreaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -55,24 +56,20 @@ const App: React.FC = () => {
       
       const prompt = `CRITICAL: EXECUTE DEEP BUSINESS INTELLIGENCE MAPPING FOR: ${url}.
       
-      TASK: You are a Senior Business Analyst. Map the entire brand DNA of this website.
+      TASK: You are a Senior Business Analyst. Map the entire brand DNA of this website to empower a high-level human-like representative.
       
-      REQUIRED DATA POINTS:
-      1. Brand Core: What is the primary business value?
-      2. Market Position: What are the key products and how do they stand out in the market?
-      3. Strategic Facts: What are the top features, prices, or policies mentioned?
-      4. Persuasive Voice: Describe the brand's professional tone.
-      
-      INSTRUCTIONS:
-      - Use live search grounding to access the actual content.
-      - Focus on converting visitors into customers.
+      REQUIRED STRATEGIC DATA:
+      1. Brand Core: What is the primary business value and mission?
+      2. Market Advantage: Why should a customer choose this specific brand over competitors?
+      3. Strategic Facts: What are the specific products, services, or prices mentioned?
+      4. Executive Tone: How should a senior representative of this brand speak (e.g. Expert, Luxury, Friendly)?
       
       RETURN JSON ONLY:
       {
-        "businessName": "Official Brand Identity",
-        "description": "Sophisticated executive summary of the business and its purpose",
-        "tone": "Brand voice descriptor (e.g. Luxury, High-Tech, Trusted Expert)",
-        "keyFacts": ["7 detailed strategic selling points and key offerings found on site"]
+        "businessName": "Official Brand Name",
+        "description": "Sophisticated executive summary of the business identity",
+        "tone": "Brand voice descriptor",
+        "keyFacts": ["7 detailed strategic selling points and offerings found on the site"]
       }`;
 
       const response = await ai.models.generateContent({
@@ -100,7 +97,7 @@ const App: React.FC = () => {
       setState(AppState.READY);
     } catch (err) {
       console.error(err);
-      setError("Strategic mapping failed. Please ensure the business URL is public and accessible.");
+      setError("Strategic mapping failed. Ensure the URL is public and valid.");
       setState(AppState.IDLE);
     }
   };
@@ -153,14 +150,14 @@ const App: React.FC = () => {
           }
         },
         (err) => {
-          setError("Strategic session interrupted.");
+          setError("Connection reset.");
           setState(AppState.READY);
         }
       );
       await sessionManager.current.connect(getSystemInstruction());
       setState(AppState.CONVERSING);
     } catch (err) {
-      setError("Microphone required for the executive voice consultant.");
+      setError("Microphone access required.");
       setState(AppState.IDLE);
     }
   };
@@ -179,7 +176,7 @@ const App: React.FC = () => {
 
     setTranscriptions([{
       type: 'model',
-      text: `Greetings! I am the Senior Executive Consultant for ${websiteData.name}. I've thoroughly mapped our business database and I'm ready to provide you with expert guidance. How can I assist you with our services today?`
+      text: `Greetings! I am the Senior Executive Consultant for ${websiteData.name}. I've thoroughly mapped our brand's strategic DNA and I'm ready to assist you. How can I help you today?`
     }]);
   };
 
@@ -206,7 +203,7 @@ const App: React.FC = () => {
         });
       }
     } catch (err) {
-      setError("Consultation failed.");
+      setError("Strategic consultation interrupted.");
     } finally {
       setIsChatLoading(false);
     }
@@ -222,24 +219,39 @@ const App: React.FC = () => {
 
   const copyToClipboard = async (text: string) => {
     try {
-      await navigator.clipboard.writeText(text);
-      setCopyStatus('copied');
+      // Primary method: Modern Clipboard API
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        setCopyStatus('copied');
+      } else {
+        // Fallback method: ExecCommand
+        if (textAreaRef.current) {
+          textAreaRef.current.value = text;
+          textAreaRef.current.select();
+          document.execCommand('copy');
+          setCopyStatus('copied');
+        }
+      }
       setTimeout(() => setCopyStatus('idle'), 2000);
     } catch (err) {
-      console.error('Failed to copy text: ', err);
+      console.error('Copy failed:', err);
+      // Last resort visual cue
+      alert("Please copy the text manually from the screen.");
     }
   };
 
   const IntegrationDashboard = () => {
-    const scriptTag = `<script src="https://sitevoice.io/v1/representative.js" data-site-id="${btoa(websiteData?.url || '').slice(0, 10)}" data-mode="executive" async></script>`;
+    const siteId = btoa(websiteData?.url || '').slice(0, 12);
+    const scriptTag = `<script src="https://sitevoice.io/v1/agent.js" data-site-id="${siteId}" data-mode="executive" async></script>`;
 
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/98 backdrop-blur-xl animate-in fade-in duration-300">
+        <textarea ref={textAreaRef} className="absolute opacity-0 pointer-events-none" readOnly />
         <div className="bg-[#0a0a0a] border border-neutral-800 w-full max-w-4xl rounded-[3rem] shadow-2xl overflow-hidden flex flex-col max-h-[95vh]">
           <div className="p-8 border-b border-neutral-800 flex justify-between items-center bg-neutral-900/30">
             <div>
-              <h3 className="text-2xl font-bold">Deploy Executive Agent</h3>
-              <p className="text-gray-400 text-sm">Professional sales representation for your digital presence.</p>
+              <h3 className="text-2xl font-bold">Strategic Deployment</h3>
+              <p className="text-gray-400 text-sm">Deploying your Senior Executive Representative to any website.</p>
             </div>
             <button onClick={() => setShowIntegration(false)} className="p-4 hover:bg-neutral-800 rounded-full transition-all">
               <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
@@ -251,8 +263,8 @@ const App: React.FC = () => {
               <div className="flex items-center gap-6">
                 <div className="w-14 h-14 bg-blue-600 rounded-3xl flex items-center justify-center font-bold text-2xl shadow-xl shadow-blue-600/30">1</div>
                 <div>
-                  <h4 className="text-xl font-bold">Copy Activation Tag</h4>
-                  <p className="text-gray-500 text-sm">Embed the professional consultant into your website UI.</p>
+                  <h4 className="text-xl font-bold">Copy Your Global Tag</h4>
+                  <p className="text-gray-500 text-sm">Paste this into any website to activate the specialist.</p>
                 </div>
               </div>
               <div className="ml-20 relative group">
@@ -261,24 +273,40 @@ const App: React.FC = () => {
                 </div>
                 <button 
                   onClick={() => copyToClipboard(scriptTag)}
-                  className={`absolute right-6 top-6 px-6 py-2 rounded-xl text-xs font-bold text-white shadow-lg active:scale-95 transition-all ${copyStatus === 'copied' ? 'bg-emerald-600' : 'bg-blue-600 hover:bg-blue-500'}`}
+                  className={`absolute right-6 top-6 px-8 py-3 rounded-2xl text-xs font-black uppercase tracking-widest text-white shadow-xl active:scale-95 transition-all ${copyStatus === 'copied' ? 'bg-emerald-600' : 'bg-blue-600 hover:bg-blue-500'}`}
                 >
-                  {copyStatus === 'copied' ? 'Copied!' : 'Copy Tag'}
+                  {copyStatus === 'copied' ? 'Success!' : 'Copy Tag'}
                 </button>
               </div>
             </section>
 
-            <section className="space-y-6 pb-10">
+            <section className="space-y-8 pb-10">
               <div className="flex items-center gap-6">
                 <div className="w-14 h-14 bg-emerald-600 rounded-3xl flex items-center justify-center font-bold text-2xl shadow-xl shadow-emerald-600/30">2</div>
-                <h4 className="text-xl font-bold">Live Integration Instructions</h4>
+                <div>
+                  <h4 className="text-xl font-bold">Link Any Industry</h4>
+                  <p className="text-gray-500 text-sm">One engine, infinite specialized industries.</p>
+                </div>
               </div>
-              <div className="ml-20 space-y-4">
-                <p className="text-gray-400 leading-relaxed">
-                  Paste the activation tag into the <code>&lt;head&gt;</code> section or just before the closing <code>&lt;/body&gt;</code> tag of your website. This will instantly activate the Senior Executive Consultant for all your visitors.
-                </p>
-                <button onClick={() => setShowIntegration(false)} className="bg-white text-black px-12 py-5 rounded-2xl font-bold text-lg hover:bg-neutral-200 transition-all shadow-2xl active:scale-95">
-                  Finish Integration
+              <div className="ml-20 grid grid-cols-2 gap-6">
+                <div className="p-6 bg-neutral-900/50 border border-neutral-800 rounded-3xl space-y-3">
+                  <div className="w-10 h-10 bg-orange-600/20 rounded-xl flex items-center justify-center text-orange-500">
+                    <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg>
+                  </div>
+                  <h5 className="font-bold">E-Commerce</h5>
+                  <p className="text-xs text-gray-500">Handles complex product queries and checkout assistance.</p>
+                </div>
+                <div className="p-6 bg-neutral-900/50 border border-neutral-800 rounded-3xl space-y-3">
+                  <div className="w-10 h-10 bg-purple-600/20 rounded-xl flex items-center justify-center text-purple-500">
+                    <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" /></svg>
+                  </div>
+                  <h5 className="font-bold">Education</h5>
+                  <p className="text-xs text-gray-500">Provides tutoring and answers math/science inquiries fluently.</p>
+                </div>
+              </div>
+              <div className="ml-20 flex justify-center pt-8">
+                <button onClick={() => setShowIntegration(false)} className="bg-white text-black px-16 py-6 rounded-[2rem] font-black text-xl hover:bg-neutral-200 transition-all shadow-2xl active:scale-95">
+                  Confirm Multi-Site Deployment
                 </button>
               </div>
             </section>
@@ -305,7 +333,7 @@ const App: React.FC = () => {
            {error && <span className="text-red-400 text-xs font-bold bg-red-900/20 px-4 py-2 rounded-xl border border-red-900/50">{error}</span>}
            <div className="flex items-center gap-2 px-4 py-2 bg-neutral-900 border border-neutral-800 rounded-2xl">
              <span className="w-2.5 h-2.5 bg-blue-500 rounded-full animate-pulse shadow-[0_0_10px_#3b82f6]"></span>
-             <span className="text-[10px] text-gray-300 uppercase tracking-widest font-black">Executive Mode</span>
+             <span className="text-[10px] text-gray-300 uppercase tracking-widest font-black">Strategic Core Active</span>
            </div>
         </div>
       </header>
@@ -315,10 +343,10 @@ const App: React.FC = () => {
           <div className="space-y-16 animate-in fade-in slide-in-from-bottom-8 duration-1000">
             <div className="text-center space-y-6">
               <h2 className="text-6xl md:text-7xl font-black tracking-tighter leading-[0.9]">
-                Expert Consultation.<br/><span className="gradient-text">Absolute Authority.</span>
+                Expert Voices.<br/><span className="gradient-text">Unified Intelligence.</span>
               </h2>
               <p className="text-xl text-gray-500 max-w-lg mx-auto leading-relaxed font-light">
-                SiteVoice maps your business DNA to provide high-level professional representation that converts visitors into loyal customers.
+                Map any website's business DNA. Link car mechanics, math teachers, or global stores to one expert engine.
               </p>
             </div>
 
@@ -326,13 +354,13 @@ const App: React.FC = () => {
               <div className="relative group">
                 <input
                   type="url"
-                  placeholder="Analyze Business URL (e.g. apple.com/mac)"
+                  placeholder="Link Business URL (e.g. apple.com/mac)"
                   required
                   className="w-full bg-neutral-900 border border-neutral-800 rounded-[2rem] px-10 py-8 text-2xl focus:ring-8 focus:ring-blue-500/5 focus:border-blue-500 outline-none transition-all placeholder:text-neutral-800 shadow-2xl"
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
                 />
-                <button type="submit" className="absolute right-4 top-4 bottom-4 bg-blue-600 hover:bg-blue-500 text-white px-10 rounded-[1.5rem] font-black text-lg shadow-xl active:scale-95 transition-all">Map Brand</button>
+                <button type="submit" className="absolute right-4 top-4 bottom-4 bg-blue-600 hover:bg-blue-500 text-white px-10 rounded-[1.5rem] font-black text-lg shadow-xl active:scale-95 transition-all">Map DNA</button>
               </div>
               <div className="flex flex-wrap gap-3 justify-center">
                 {PRESET_SITES.map(site => (
@@ -359,7 +387,7 @@ const App: React.FC = () => {
               </div>
             </div>
             <div className="text-center space-y-3">
-              <h3 className="text-3xl font-black">Strategic Brand Analysis...</h3>
+              <h3 className="text-3xl font-black">Strategic DNA Mapping...</h3>
               <p className="text-gray-500 font-medium">Extracting business intelligence, competitive edges, and professional tone.</p>
             </div>
           </div>
@@ -379,17 +407,17 @@ const App: React.FC = () => {
 
             <div className="space-y-8">
               <div className="space-y-3">
-                <p className="text-[11px] text-gray-600 uppercase font-black tracking-[0.3em]">Brand DNA Overview</p>
+                <p className="text-[11px] text-gray-600 uppercase font-black tracking-[0.3em]">Business Intelligence</p>
                 <p className="text-xl text-gray-200 leading-relaxed font-light italic">"{websiteData.description}"</p>
               </div>
               <div className="grid grid-cols-2 gap-10">
                 <div className="space-y-2">
-                  <p className="text-[11px] text-gray-600 uppercase font-black tracking-[0.3em]">Representative Role</p>
-                  <p className="text-blue-400 font-bold text-lg">Senior {websiteData.tone} Representative</p>
+                  <p className="text-[11px] text-gray-600 uppercase font-black tracking-[0.3em]">Representative Persona</p>
+                  <p className="text-blue-400 font-bold text-lg">Senior {websiteData.tone} Consultant</p>
                 </div>
                 <div className="space-y-2">
-                  <p className="text-[11px] text-gray-600 uppercase font-black tracking-[0.3em]">Intelligence Status</p>
-                  <p className="text-emerald-500 font-bold text-lg">Fully Optimized</p>
+                  <p className="text-[11px] text-gray-600 uppercase font-black tracking-[0.3em]">Mapping Status</p>
+                  <p className="text-emerald-500 font-bold text-lg">Optimized & Linked</p>
                 </div>
               </div>
             </div>
@@ -406,7 +434,7 @@ const App: React.FC = () => {
               </button>
 
               <button onClick={resetToHome} className="w-full bg-neutral-900 border border-neutral-800 text-gray-400 py-4 rounded-[1.5rem] font-bold text-sm hover:text-white transition-all active:scale-95">
-                Map New Business
+                Analyze New Business
               </button>
             </div>
           </div>
