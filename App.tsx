@@ -55,8 +55,8 @@ const App: React.FC = () => {
     setGroundingLinks([]);
 
     const apiKey = process.env.API_KEY;
-    if (!apiKey || apiKey === 'undefined') {
-      setError("API_KEY is missing. Please set it in Vercel settings and REDEPLOY.");
+    if (!apiKey || apiKey === '' || apiKey === 'undefined') {
+      setError("CRITICAL: API_KEY is missing from Vercel. Please add it to Environment Variables and REDEPLOY.");
       setState(AppState.IDLE);
       return;
     }
@@ -64,8 +64,17 @@ const App: React.FC = () => {
     try {
       const ai = new GoogleGenAI({ apiKey });
       
-      const prompt = `CRITICAL: EXECUTE DEEP BUSINESS INTELLIGENCE MAPPING FOR: ${url}.
-      Map the entire brand DNA to empower a high-level human-like representative.`;
+      const prompt = `Act as a Senior Business Intelligence Agent. 
+      Use Google Search to browse: ${url}.
+      Perform a deep analysis of this business. 
+      Return ONLY a JSON object with the following structure:
+      {
+        "businessName": "Official Name",
+        "description": "A sophisticated executive summary of their mission and services (2-3 sentences)",
+        "tone": "One word defining their professional voice (e.g. Visionary, Precise, Luxury)",
+        "keyFacts": ["Fact 1", "Fact 2", "Fact 3", "Fact 4"]
+      }
+      If the site is unreachable, explain why in the businessName field.`;
 
       const response = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
@@ -89,17 +98,33 @@ const App: React.FC = () => {
         }
       });
 
-      // Extract grounding links as per requirements
+      const responseText = response.text || '';
+      if (!responseText) {
+        throw new Error("The AI returned an empty response. This usually happens if safety filters are triggered or the URL is blocked.");
+      }
+
+      // Extract grounding links for transparency
       const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
       const links = chunks
         .filter(c => c.web)
         .map(c => ({ title: c.web.title, uri: c.web.uri }));
       setGroundingLinks(links);
 
-      const data = JSON.parse(response.text || '{}');
+      let data;
+      try {
+        data = JSON.parse(responseText);
+      } catch (parseErr) {
+        // Fallback in case the model wraps JSON in code blocks despite config
+        const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          data = JSON.parse(jsonMatch[0]);
+        } else {
+          throw new Error("Failed to parse business DNA. The AI returned malformed data.");
+        }
+      }
       
-      if (!data.businessName || data.businessName.toLowerCase().includes("not found")) {
-        throw new Error("Target website could not be mapped. It might be blocking crawlers.");
+      if (!data.businessName || data.businessName.toLowerCase().includes("not found") || data.businessName.toLowerCase().includes("error")) {
+        throw new Error(`Mapping failed: The business at ${url} could not be analyzed. Ensure the site is public.`);
       }
 
       setWebsiteData({
@@ -112,7 +137,9 @@ const App: React.FC = () => {
       setState(AppState.READY);
     } catch (err: any) {
       console.error("Mapping Error:", err);
-      setError(err.message || "Strategic mapping failed. Check the console for details.");
+      // Display the actual error message from the Gemini SDK if available
+      const detailedError = err.message || "Unknown communication error with Strategic Core.";
+      setError(`Mapping Failed: ${detailedError}`);
       setState(AppState.IDLE);
     }
   };
@@ -165,14 +192,14 @@ const App: React.FC = () => {
           }
         },
         (err) => {
-          setError("Voice session interrupted. Try refreshing.");
+          setError(`Voice Link Terminated: ${err.message || 'Connection lost'}`);
           setState(AppState.READY);
         }
       );
       await sessionManager.current.connect(getSystemInstruction());
       setState(AppState.CONVERSING);
     } catch (err: any) {
-      setError(err.message || "Microphone access or connection failed.");
+      setError(`Hardware Conflict: ${err.message || "Microphone access denied."}`);
       setState(AppState.READY);
     }
   };
@@ -217,8 +244,8 @@ const App: React.FC = () => {
           return newTrans;
         });
       }
-    } catch (err) {
-      setError("Strategic consultation interrupted.");
+    } catch (err: any) {
+      setError(`Chat Interrupted: ${err.message || 'Unknown error'}`);
     } finally {
       setIsChatLoading(false);
     }
@@ -336,13 +363,29 @@ const App: React.FC = () => {
           <h1 className="text-3xl font-black tracking-tighter">SiteVoice</h1>
         </div>
         <div className="flex items-center gap-4">
-           {error && <span className="text-red-400 text-xs font-bold bg-red-900/20 px-4 py-2 rounded-xl border border-red-900/50 max-w-xs truncate" title={error}>{error}</span>}
            <div className="flex items-center gap-2 px-4 py-2 bg-neutral-900 border border-neutral-800 rounded-2xl">
              <span className="w-2.5 h-2.5 bg-blue-500 rounded-full animate-pulse shadow-[0_0_10px_#3b82f6]"></span>
              <span className="text-[10px] text-gray-300 uppercase tracking-widest font-black">Strategic Core Active</span>
            </div>
         </div>
       </header>
+
+      {error && (
+        <div className="w-full max-w-2xl mb-8 animate-in slide-in-from-top-4">
+          <div className="bg-red-900/10 border border-red-500/30 p-6 rounded-[2rem] flex gap-4 items-start shadow-xl shadow-red-900/5">
+            <div className="w-10 h-10 bg-red-500 rounded-full flex items-center justify-center flex-shrink-0">
+              <svg className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+            </div>
+            <div className="space-y-1">
+              <p className="font-black text-red-500 text-lg uppercase tracking-tight">System Notification</p>
+              <p className="text-red-200/80 leading-relaxed text-sm">{error}</p>
+            </div>
+            <button onClick={() => setError(null)} className="ml-auto text-red-500 hover:text-red-400 p-2">
+               <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+            </button>
+          </div>
+        </div>
+      )}
 
       <main className="w-full max-w-2xl flex flex-col gap-8 flex-grow">
         {state === AppState.IDLE && (
