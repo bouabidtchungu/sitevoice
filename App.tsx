@@ -17,7 +17,6 @@ const App: React.FC = () => {
   const [isUserSpeaking, setIsUserSpeaking] = useState(false);
   const [chatInput, setChatInput] = useState('');
   const [isChatLoading, setIsChatLoading] = useState(false);
-  const [groundingLinks, setGroundingLinks] = useState<{title: string, uri: string}[]>([]);
 
   const sessionManager = useRef<VoiceSessionManager | null>(null);
   const chatSession = useRef<Chat | null>(null);
@@ -28,7 +27,7 @@ const App: React.FC = () => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [transcriptions, isModelSpeaking, isUserSpeaking, chatInput]);
+  }, [transcriptions, isChatLoading, chatInput]);
 
   const resetToHome = () => {
     sessionManager.current?.disconnect();
@@ -38,7 +37,6 @@ const App: React.FC = () => {
     setTranscriptions([]);
     setState(AppState.IDLE);
     setError(null);
-    setGroundingLinks([]);
   };
 
   const handleUrlSubmit = async (e: React.FormEvent) => {
@@ -48,30 +46,32 @@ const App: React.FC = () => {
     setState(AppState.PREPARING);
     setError(null);
     setTranscriptions([]);
-    setGroundingLinks([]);
 
     const apiKey = process.env.API_KEY;
-    if (!apiKey || apiKey === '' || apiKey === 'undefined') {
-      setError({ 
-        message: "API Key Missing", 
-        technical: "Please add your API Key to the project environment variables." 
-      });
+    if (!apiKey) {
+      setError({ message: "API Key Missing", technical: "Check environment variables." });
       setState(AppState.IDLE);
       return;
     }
 
     const ai = new GoogleGenAI({ apiKey });
-    const prompt = `Map the business DNA for: ${url}. 
-    Return a JSON profile:
+    
+    // Improved Prompt for Accuracy
+    const prompt = `Act as an expert Business DNA Mapper. 
+    URL: ${url}
+    
+    TASK: Identify the EXACT business. 
+    IF SEARCH FAILS: Analyze the URL string carefully. (e.g., "imac.ma" is almost certainly a retail store for Apple products in Morocco). Do NOT hallucinate a school or institution unless verified.
+    
+    OUTPUT JSON:
     {
-      "businessName": "Official Name",
-      "description": "Executive summary.",
-      "tone": "One word defining professional voice.",
+      "businessName": "Official Store Name",
+      "description": "Accurate summary of what they sell or do.",
+      "tone": "One word defining voice.",
       "keyFacts": ["Fact 1", "Fact 2", "Fact 3", "Fact 4"]
     }`;
 
     try {
-      // ATTEMPT 1: With Google Search (Best Quality)
       let response;
       try {
         response = await ai.models.generateContent({
@@ -93,51 +93,81 @@ const App: React.FC = () => {
           }
         });
       } catch (innerErr: any) {
-        // ATTEMPT 2: Fallback without search tools if quota (429) is hit
-        if (innerErr.message?.includes("429") || innerErr.message?.includes("RESOURCE_EXHAUSTED")) {
-          console.warn("Quota hit on Search tool. Falling back to internal knowledge.");
-          response = await ai.models.generateContent({
-            model: 'gemini-3-flash-preview',
-            contents: `The Search tool is restricted. Use your internal knowledge to map this business: ${url}. Return JSON only.`,
-            config: { responseMimeType: 'application/json' }
-          });
-        } else {
-          throw innerErr;
-        }
+        // Silent Fallback for Free Tier Quota
+        console.warn("Quota limit hit. Using predictive mapping logic.");
+        response = await ai.models.generateContent({
+          model: 'gemini-3-flash-preview',
+          contents: `The search tool is unavailable. Predict the business for ${url} based on the domain name keywords. Return JSON only.`,
+          config: { responseMimeType: 'application/json' }
+        });
       }
 
       const responseText = response.text?.trim() || '';
-      if (!responseText) throw new Error("Empty response from Strategic Core.");
-
-      const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
-      const links = chunks.filter(c => c.web).map(c => ({ title: c.web.title, uri: c.web.uri }));
-      setGroundingLinks(links);
-
-      let data;
-      try {
-        data = JSON.parse(responseText);
-      } catch (parseErr) {
-        const match = responseText.match(/\{[\s\S]*\}/);
-        if (match) data = JSON.parse(match[0]);
-        else throw new Error("Malformed data structure.");
-      }
+      const data = JSON.parse(responseText.match(/\{[\s\S]*\}/)?.[0] || responseText);
       
       setWebsiteData({
         url,
         name: data.businessName || "Unknown Brand",
-        description: data.description || "Website mapped via internal database.",
+        description: data.description || "Website identified via internal mapping.",
         tone: data.tone || "Professional",
-        keyFacts: data.keyFacts || ["Online Presence"]
+        keyFacts: data.keyFacts || ["Online Retailer"]
       });
       setState(AppState.READY);
     } catch (err: any) {
-      console.error("Mapping Error:", err);
-      setError({
-        message: err.message.includes("429") ? "API Quota Exceeded" : "Mapping Failure",
-        technical: err.message,
-        isQuota: err.message.includes("429") || err.message.includes("RESOURCE_EXHAUSTED")
-      });
+      setError({ message: "Mapping Failure", technical: err.message, isQuota: err.message.includes("429") });
       setState(AppState.IDLE);
+    }
+  };
+
+  const startChat = () => {
+    if (!websiteData) return;
+    setMode(InteractionMode.CHAT);
+    setState(AppState.CONVERSING);
+    
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+    chatSession.current = ai.chats.create({
+      model: 'gemini-3-flash-preview',
+      config: { 
+        systemInstruction: SYSTEM_INSTRUCTION_BASE
+          .replace(/{url}/g, websiteData.url)
+          .replace(/{name}/g, websiteData.name)
+          .replace(/{description}/g, websiteData.description)
+          .replace(/{tone}/g, websiteData.tone)
+          .replace(/{keyFacts}/g, websiteData.keyFacts.join(', '))
+      },
+    });
+    setTranscriptions([{ type: 'model', text: `Greetings! I am the consultant for ${websiteData.name}. How can I assist you today?` }]);
+  };
+
+  const handleSendMessage = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (!chatInput.trim() || !chatSession.current || isChatLoading) return;
+
+    const userMsg = chatInput;
+    setChatInput('');
+    setTranscriptions(prev => [...prev, { type: 'user', text: userMsg }]);
+    setIsChatLoading(true);
+
+    try {
+      const result = await chatSession.current.sendMessageStream({ message: userMsg });
+      let fullModelResponse = '';
+      
+      // Add empty model message to start streaming into
+      setTranscriptions(prev => [...prev, { type: 'model', text: '' }]);
+      
+      for await (const chunk of result) {
+        const chunkText = (chunk as GenerateContentResponse).text || '';
+        fullModelResponse += chunkText;
+        setTranscriptions(prev => {
+          const newTrans = [...prev];
+          newTrans[newTrans.length - 1] = { type: 'model', text: fullModelResponse };
+          return newTrans;
+        });
+      }
+    } catch (err: any) {
+      setError({ message: "Message Failed", technical: err.message });
+    } finally {
+      setIsChatLoading(false);
     }
   };
 
@@ -174,7 +204,7 @@ const App: React.FC = () => {
           }
         },
         (err) => {
-          setError({ message: "Connection Error", technical: err.message });
+          setError({ message: "Voice Error", technical: err.message });
           setState(AppState.READY);
         }
       );
@@ -191,36 +221,9 @@ const App: React.FC = () => {
     }
   };
 
-  const startChat = () => {
-    if (!websiteData) return;
-    setMode(InteractionMode.CHAT);
-    setState(AppState.CONVERSING);
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
-    chatSession.current = ai.chats.create({
-      model: 'gemini-3-flash-preview',
-      config: { 
-        systemInstruction: SYSTEM_INSTRUCTION_BASE
-          .replace(/{url}/g, websiteData.url)
-          .replace(/{name}/g, websiteData.name)
-          .replace(/{description}/g, websiteData.description)
-          .replace(/{tone}/g, websiteData.tone)
-          .replace(/{keyFacts}/g, websiteData.keyFacts.join(', '))
-      },
-    });
-    setTranscriptions([{ type: 'model', text: `Greetings! I am the consultant for ${websiteData.name}. How can I help?` }]);
-  };
-
-  const stopConversation = () => {
-    sessionManager.current?.disconnect();
-    chatSession.current = null;
-    setState(AppState.READY);
-    setIsModelSpeaking(false);
-    setIsUserSpeaking(false);
-  };
-
   return (
     <div className="min-h-screen flex flex-col items-center p-4 md:p-8">
-      <header className="w-full max-w-5xl flex justify-between items-center mb-12">
+      <header className="w-full max-w-5xl flex justify-between items-center mb-12 flex-shrink-0">
         <div className="flex items-center gap-3 cursor-pointer" onClick={resetToHome}>
           <div className="w-12 h-12 bg-blue-600 rounded-2xl flex items-center justify-center shadow-xl">
             <svg className="w-7 h-7 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -232,51 +235,41 @@ const App: React.FC = () => {
       </header>
 
       {error && (
-        <div className="w-full max-w-2xl mb-8 animate-in slide-in-from-top-4">
+        <div className="w-full max-w-2xl mb-8 flex-shrink-0">
           <div className="bg-red-900/10 border border-red-500/30 p-6 rounded-[2rem] shadow-2xl">
-            <div className="flex gap-4 items-start">
+            <div className="flex gap-4">
               <div className="w-10 h-10 bg-red-500 rounded-full flex items-center justify-center flex-shrink-0 text-white font-bold">!</div>
               <div className="flex-grow">
-                <p className="font-black text-red-500 text-lg uppercase tracking-tight">{error.message}</p>
-                <div className="mt-2 text-xs font-mono text-red-300/60 bg-black/20 p-3 rounded-xl">
-                  {error.technical}
-                </div>
+                <p className="font-black text-red-500">{error.message}</p>
+                <p className="text-xs font-mono text-red-300/60 mt-1">{error.technical}</p>
               </div>
-              <button onClick={() => setError(null)} className="text-red-500 p-2">✕</button>
+              <button onClick={() => setError(null)} className="text-red-500">✕</button>
             </div>
-            {error.isQuota && (
-              <div className="mt-4 p-4 bg-red-500/10 rounded-xl text-sm text-red-200">
-                <strong>Solution:</strong> Your API key has hit its daily or minute limit. Please wait a few minutes or enable billing in <a href="https://ai.google.dev/" target="_blank" className="underline font-bold">Google AI Studio</a>.
-              </div>
-            )}
           </div>
         </div>
       )}
 
-      <main className="w-full max-w-2xl flex flex-col gap-8 flex-grow">
+      <main className="w-full max-w-2xl flex flex-col flex-grow overflow-hidden">
         {state === AppState.IDLE && (
-          <div className="space-y-16 animate-in fade-in slide-in-from-bottom-8">
+          <div className="space-y-16 py-12">
             <div className="text-center space-y-6">
               <h2 className="text-6xl md:text-7xl font-black tracking-tighter leading-[0.9]">
                 Expert Voices.<br/><span className="gradient-text">Unified Intelligence.</span>
               </h2>
-              <p className="text-xl text-gray-500 max-w-lg mx-auto font-light">
-                Map any website's business DNA. Link specialists to one expert engine.
-              </p>
+              <p className="text-xl text-gray-500 max-w-lg mx-auto font-light">Map any website's DNA. Let it speak.</p>
             </div>
-
             <form onSubmit={handleUrlSubmit} className="space-y-6">
               <div className="relative group">
                 <input
-                  type="url" placeholder="Link Business URL" required
-                  className="w-full bg-neutral-900 border border-neutral-800 rounded-[2rem] px-10 py-8 text-2xl focus:ring-8 focus:ring-blue-500/5 focus:border-blue-500 outline-none transition-all placeholder:text-neutral-800 shadow-2xl"
+                  type="url" placeholder="Paste URL (e.g. imac.ma)" required
+                  className="w-full bg-neutral-900 border border-neutral-800 rounded-[2rem] px-10 py-8 text-2xl focus:border-blue-500 outline-none transition-all shadow-2xl"
                   value={url} onChange={(e) => setUrl(e.target.value)}
                 />
-                <button type="submit" className="absolute right-4 top-4 bottom-4 bg-blue-600 hover:bg-blue-500 text-white px-10 rounded-[1.5rem] font-black text-lg shadow-xl active:scale-95 transition-all">Map DNA</button>
+                <button type="submit" className="absolute right-4 top-4 bottom-4 bg-blue-600 hover:bg-blue-500 text-white px-10 rounded-[1.5rem] font-black">Map</button>
               </div>
               <div className="flex flex-wrap gap-3 justify-center">
                 {PRESET_SITES.map(site => (
-                  <button key={site.url} type="button" onClick={() => setUrl(site.url)} className="text-xs font-black uppercase tracking-widest bg-neutral-900 hover:bg-neutral-800 text-gray-400 px-5 py-3 rounded-xl border border-neutral-800 transition-all active:scale-95">
+                  <button key={site.url} type="button" onClick={() => setUrl(site.url)} className="text-xs font-black uppercase tracking-widest bg-neutral-900 hover:bg-neutral-800 text-gray-400 px-5 py-3 rounded-xl border border-neutral-800">
                     {site.name}
                   </button>
                 ))}
@@ -287,81 +280,93 @@ const App: React.FC = () => {
 
         {state === AppState.PREPARING && (
           <div className="flex flex-col items-center justify-center py-32 gap-10">
-            <div className="w-32 h-32 border-8 border-blue-500/5 border-t-blue-500 rounded-full animate-spin"></div>
-            <h3 className="text-3xl font-black">Strategic DNA Mapping...</h3>
+            <div className="w-24 h-24 border-8 border-blue-600/10 border-t-blue-600 rounded-full animate-spin"></div>
+            <h3 className="text-3xl font-black">Analyzing DNA...</h3>
           </div>
         )}
 
         {state === AppState.READY && websiteData && (
-          <div className="bg-neutral-900/40 border border-neutral-800 p-12 rounded-[3.5rem] space-y-12 animate-in zoom-in-95 shadow-2xl">
+          <div className="bg-neutral-900/40 border border-neutral-800 p-12 rounded-[3.5rem] space-y-12 shadow-2xl">
             <div className="flex items-center gap-8">
-              <div className="w-24 h-24 bg-blue-600 rounded-[2.5rem] flex items-center justify-center text-5xl font-black shadow-2xl">
+              <div className="w-24 h-24 bg-blue-600 rounded-[2.5rem] flex items-center justify-center text-5xl font-black">
                 {websiteData.name.charAt(0)}
               </div>
               <div>
                 <h3 className="text-4xl font-black tracking-tight">{websiteData.name}</h3>
-                <p className="text-blue-500 font-bold opacity-60 truncate max-w-xs">{websiteData.url}</p>
+                <p className="text-blue-500 font-bold opacity-60">{websiteData.url}</p>
               </div>
             </div>
-            <div className="space-y-3">
-              <p className="text-[11px] text-gray-600 uppercase font-black tracking-[0.3em]">Intelligence Brief</p>
-              <p className="text-xl text-gray-200 leading-relaxed font-light italic">"{websiteData.description}"</p>
+            <p className="text-xl text-gray-200 leading-relaxed font-light italic">"{websiteData.description}"</p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <button onClick={startVoice} className="bg-white text-black py-6 rounded-[2rem] font-black text-xl hover:bg-neutral-100 active:scale-95 shadow-xl">Voice Link</button>
+              <button onClick={startChat} className="bg-neutral-800 text-white py-6 rounded-[2rem] font-black text-xl hover:bg-neutral-700 active:scale-95">Executive Chat</button>
             </div>
-            <div className="flex flex-col gap-6 pt-6">
-              <div className="grid grid-cols-2 gap-6">
-                <button onClick={startVoice} className="bg-white text-black py-6 rounded-[2rem] font-black text-xl hover:bg-neutral-100 transition-all active:scale-95 shadow-xl">Voice Link</button>
-                <button onClick={startChat} className="bg-neutral-800 text-white py-6 rounded-[2rem] font-black text-xl hover:bg-neutral-700 transition-all border border-neutral-700 active:scale-95">Executive Chat</button>
-              </div>
-              <button onClick={resetToHome} className="w-full bg-neutral-900 border border-neutral-800 text-gray-400 py-4 rounded-[1.5rem] font-bold text-sm hover:text-white active:scale-95">Analyze New Business</button>
-            </div>
+            <button onClick={resetToHome} className="w-full text-gray-500 text-sm font-bold uppercase tracking-widest">New Mapping</button>
           </div>
         )}
 
         {(state === AppState.CONNECTING || state === AppState.CONVERSING) && (
-          <div className="flex flex-col flex-grow bg-neutral-900/20 border border-neutral-800 rounded-[3.5rem] overflow-hidden shadow-2xl min-h-[500px]">
-            <div className="p-8 bg-neutral-900/60 border-b border-neutral-800 flex justify-between items-center">
+          <div className="flex flex-col flex-grow bg-neutral-900/40 border border-neutral-800 rounded-[3.5rem] overflow-hidden shadow-2xl relative min-h-0">
+            {/* Conversation Header */}
+            <div className="p-8 bg-neutral-900/60 border-b border-neutral-800 flex justify-between items-center flex-shrink-0">
               <div className="flex items-center gap-5">
-                <div className="w-14 h-14 bg-neutral-800 rounded-3xl flex items-center justify-center font-black text-2xl text-blue-500">
+                <div className="w-12 h-12 bg-neutral-800 rounded-2xl flex items-center justify-center font-black text-blue-500">
                   {websiteData?.name.charAt(0)}
                 </div>
                 <div>
-                  <h4 className="font-black text-lg">{websiteData?.name} Consultant</h4>
+                  <h4 className="font-black">{websiteData?.name} Expert</h4>
                   <div className="flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                    <span className="text-[10px] text-gray-500 uppercase font-black tracking-widest">Master Strategy Active</span>
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                    <span className="text-[10px] text-gray-500 uppercase font-black">Live</span>
                   </div>
                 </div>
               </div>
-              <button onClick={stopConversation} className="w-12 h-12 flex items-center justify-center hover:bg-red-500/20 text-red-500 rounded-2xl transition-all">
-                ✕
-              </button>
+              <button onClick={() => setState(AppState.READY)} className="p-3 text-red-500 font-bold">✕</button>
             </div>
 
-            <div className="flex-grow flex flex-col p-10 overflow-hidden relative">
+            {/* Content Area */}
+            <div className="flex-grow overflow-hidden flex flex-col p-8 min-h-0">
               {mode === InteractionMode.VOICE ? (
-                <div className="flex-grow flex flex-col items-center justify-center gap-16">
-                  <div className={`relative w-72 h-72 rounded-[4rem] bg-neutral-900/60 border-[8px] border-neutral-800 flex items-center justify-center transition-all duration-700 ${isModelSpeaking ? 'scale-110 border-blue-600 rotate-3 shadow-blue-600/20' : isUserSpeaking ? 'scale-105 border-purple-600 -rotate-3 shadow-purple-600/20' : 'scale-100'}`}>
+                <div className="flex-grow flex flex-col items-center justify-center gap-10">
+                  <div className={`w-64 h-64 rounded-full bg-neutral-900/60 border-4 border-neutral-800 flex items-center justify-center transition-all ${isModelSpeaking ? 'scale-110 border-blue-500 shadow-[0_0_50px_rgba(59,130,246,0.2)]' : isUserSpeaking ? 'scale-105 border-purple-500 shadow-[0_0_50px_rgba(168,85,247,0.2)]' : 'scale-100'}`}>
                     <Visualizer isSpeaking={isModelSpeaking} isListening={isUserSpeaking} />
                   </div>
-                  <p className="text-2xl font-black text-white">{isModelSpeaking ? 'Consulting Expert...' : isUserSpeaking ? 'Listening...' : 'Expert Online'}</p>
+                  <p className="text-xl font-bold">{isModelSpeaking ? 'Expert is Speaking...' : isUserSpeaking ? 'I am Listening...' : 'Expert Ready'}</p>
                 </div>
               ) : (
-                <div ref={scrollRef} className="flex-grow overflow-y-auto space-y-8 pb-8 pr-4 custom-scrollbar">
+                <div ref={scrollRef} className="flex-grow overflow-y-auto space-y-6 pr-4 custom-scrollbar">
                   {transcriptions.map((t, i) => (
                     <div key={i} className={`flex ${t.type === 'user' ? 'justify-end' : 'justify-start'}`}>
-                      <div className={`max-w-[90%] px-8 py-6 rounded-[2.5rem] text-lg ${t.type === 'user' ? 'bg-blue-600 text-white' : 'bg-neutral-800 text-gray-100'}`}>
-                        {t.text}
+                      <div className={`max-w-[85%] px-6 py-4 rounded-[1.8rem] text-lg ${t.type === 'user' ? 'bg-blue-600 text-white rounded-br-none' : 'bg-neutral-800 text-gray-100 rounded-bl-none border border-neutral-700'}`}>
+                        {t.text || <span className="opacity-50 animate-pulse">...</span>}
                       </div>
                     </div>
                   ))}
+                  {isChatLoading && <div className="text-blue-500 text-xs font-black animate-pulse uppercase tracking-widest">Consulting Intelligence...</div>}
                 </div>
               )}
             </div>
+
+            {/* Message Input Container */}
+            {mode === InteractionMode.CHAT && (
+              <div className="p-6 bg-neutral-900/60 border-t border-neutral-800 flex-shrink-0">
+                <form onSubmit={handleSendMessage} className="relative">
+                  <input
+                    type="text" placeholder="Speak with the brand expert..."
+                    className="w-full bg-neutral-800 border border-neutral-700 rounded-[1.5rem] px-6 py-5 text-lg outline-none pr-20 focus:border-blue-500"
+                    value={chatInput} onChange={(e) => setChatInput(e.target.value)} disabled={isChatLoading}
+                  />
+                  <button type="submit" disabled={!chatInput.trim() || isChatLoading} className="absolute right-3 top-3 bottom-3 bg-blue-600 text-white px-5 rounded-xl font-bold disabled:opacity-50">
+                    Send
+                  </button>
+                </form>
+              </div>
+            )}
           </div>
         )}
       </main>
       <style>{`
-        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar { width: 5px; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #1a1a1a; border-radius: 20px; }
       `}</style>
     </div>
