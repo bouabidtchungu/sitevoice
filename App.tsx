@@ -55,8 +55,11 @@ const App: React.FC = () => {
     setGroundingLinks([]);
 
     const apiKey = process.env.API_KEY;
+    
+    // Diagnostic check for API key
     if (!apiKey || apiKey === '' || apiKey === 'undefined') {
-      setError("CRITICAL: API_KEY is missing from Vercel. Please add it to Environment Variables and REDEPLOY.");
+      console.error("API_KEY is missing from environment variables.");
+      setError("CRITICAL: API_KEY is missing. Check Vercel environment variables and redeploy.");
       setState(AppState.IDLE);
       return;
     }
@@ -64,46 +67,58 @@ const App: React.FC = () => {
     try {
       const ai = new GoogleGenAI({ apiKey });
       
-      const prompt = `Act as a Senior Business Intelligence Agent. 
-      Use Google Search to browse: ${url}.
-      Perform a deep analysis of this business. 
-      Return ONLY a JSON object with the following structure:
+      const prompt = `Act as a Professional Business DNA Mapper.
+      TARGET URL: ${url}
+      
+      TASK: 
+      1. Use Google Search to analyze the business at this URL.
+      2. Return a precise business intelligence profile.
+      
+      OUTPUT FORMAT (JSON ONLY):
       {
         "businessName": "Official Name",
-        "description": "A sophisticated executive summary of their mission and services (2-3 sentences)",
-        "tone": "One word defining their professional voice (e.g. Visionary, Precise, Luxury)",
+        "description": "Executive summary of what they do.",
+        "tone": "One word defining professional voice.",
         "keyFacts": ["Fact 1", "Fact 2", "Fact 3", "Fact 4"]
-      }
-      If the site is unreachable, explain why in the businessName field.`;
+      }`;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: prompt,
-        config: { 
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              businessName: { type: Type.STRING },
-              description: { type: Type.STRING },
-              tone: { type: Type.STRING },
-              keyFacts: { 
-                type: Type.ARRAY,
-                items: { type: Type.STRING }
-              }
+      let response;
+      try {
+        response = await ai.models.generateContent({
+          model: 'gemini-3-flash-preview',
+          contents: prompt,
+          config: { 
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                businessName: { type: Type.STRING },
+                description: { type: Type.STRING },
+                tone: { type: Type.STRING },
+                keyFacts: { 
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING }
+                }
+              },
+              required: ["businessName", "description", "tone", "keyFacts"]
             },
-            required: ["businessName", "description", "tone", "keyFacts"]
-          },
-          tools: [{ googleSearch: {} }] 
-        }
-      });
-
-      const responseText = response.text || '';
-      if (!responseText) {
-        throw new Error("The AI returned an empty response. This usually happens if safety filters are triggered or the URL is blocked.");
+            tools: [{ googleSearch: {} }] 
+          }
+        });
+      } catch (toolError: any) {
+        console.warn("Tool attempt failed, trying text-only fallback:", toolError);
+        // Fallback: Try without search tools if the search tool is failing
+        response = await ai.models.generateContent({
+          model: 'gemini-3-flash-preview',
+          contents: `Map the business profile for: ${url}. Return JSON only.`,
+          config: { responseMimeType: 'application/json' }
+        });
       }
 
-      // Extract grounding links for transparency
+      const responseText = response.text?.trim() || '';
+      if (!responseText) throw new Error("Received an empty response from Strategic Core.");
+
+      // Extract grounding links if available
       const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
       const links = chunks
         .filter(c => c.web)
@@ -114,17 +129,13 @@ const App: React.FC = () => {
       try {
         data = JSON.parse(responseText);
       } catch (parseErr) {
-        // Fallback in case the model wraps JSON in code blocks despite config
-        const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          data = JSON.parse(jsonMatch[0]);
-        } else {
-          throw new Error("Failed to parse business DNA. The AI returned malformed data.");
-        }
+        const match = responseText.match(/\{[\s\S]*\}/);
+        if (match) data = JSON.parse(match[0]);
+        else throw new Error("Business DNA structure was malformed.");
       }
       
-      if (!data.businessName || data.businessName.toLowerCase().includes("not found") || data.businessName.toLowerCase().includes("error")) {
-        throw new Error(`Mapping failed: The business at ${url} could not be analyzed. Ensure the site is public.`);
+      if (!data.businessName || data.businessName.toLowerCase().includes("not found")) {
+        throw new Error("Target could not be mapped. Ensure the URL is valid and public.");
       }
 
       setWebsiteData({
@@ -137,9 +148,9 @@ const App: React.FC = () => {
       setState(AppState.READY);
     } catch (err: any) {
       console.error("Mapping Error:", err);
-      // Display the actual error message from the Gemini SDK if available
-      const detailedError = err.message || "Unknown communication error with Strategic Core.";
-      setError(`Mapping Failed: ${detailedError}`);
+      // Display the specific technical error message
+      const technicalMsg = err.message || "Unknown communication failure.";
+      setError(`Mapping Failed: ${technicalMsg}`);
       setState(AppState.IDLE);
     }
   };
@@ -192,14 +203,14 @@ const App: React.FC = () => {
           }
         },
         (err) => {
-          setError(`Voice Link Terminated: ${err.message || 'Connection lost'}`);
+          setError(`Voice session interrupted: ${err.message || 'Check connection'}`);
           setState(AppState.READY);
         }
       );
       await sessionManager.current.connect(getSystemInstruction());
       setState(AppState.CONVERSING);
     } catch (err: any) {
-      setError(`Hardware Conflict: ${err.message || "Microphone access denied."}`);
+      setError(`Microphone failure: ${err.message || "Permission denied."}`);
       setState(AppState.READY);
     }
   };
@@ -245,7 +256,7 @@ const App: React.FC = () => {
         });
       }
     } catch (err: any) {
-      setError(`Chat Interrupted: ${err.message || 'Unknown error'}`);
+      setError(`Chat failure: ${err.message || "Lost contact."}`);
     } finally {
       setIsChatLoading(false);
     }
@@ -278,95 +289,33 @@ const App: React.FC = () => {
     }
   };
 
-  const IntegrationDashboard = () => {
-    const siteId = btoa(websiteData?.url || '').slice(0, 12);
-    const scriptTag = `<script src="https://sitevoice.io/v1/agent.js" data-site-id="${siteId}" data-mode="executive" async></script>`;
-
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/98 backdrop-blur-xl animate-in fade-in duration-300">
-        <textarea ref={textAreaRef} className="absolute opacity-0 pointer-events-none" readOnly />
-        <div className="bg-[#0a0a0a] border border-neutral-800 w-full max-w-4xl rounded-[3rem] shadow-2xl overflow-hidden flex flex-col max-h-[95vh]">
-          <div className="p-8 border-b border-neutral-800 flex justify-between items-center bg-neutral-900/30">
-            <div>
-              <h3 className="text-2xl font-bold">Strategic Deployment</h3>
-              <p className="text-gray-400 text-sm">Deploying your Senior Executive Representative to any website.</p>
-            </div>
-            <button onClick={() => setShowIntegration(false)} className="p-4 hover:bg-neutral-800 rounded-full transition-all">
-              <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-            </button>
-          </div>
-          
-          <div className="flex-grow overflow-y-auto p-10 space-y-16">
-            <section className="space-y-6">
-              <div className="flex items-center gap-6">
-                <div className="w-14 h-14 bg-blue-600 rounded-3xl flex items-center justify-center font-bold text-2xl shadow-xl shadow-blue-600/30">1</div>
-                <div>
-                  <h4 className="text-xl font-bold">Copy Your Global Tag</h4>
-                  <p className="text-gray-500 text-sm">Paste this into any website to activate the specialist.</p>
-                </div>
-              </div>
-              <div className="ml-20 relative group">
-                <div className="bg-neutral-900 rounded-3xl p-8 font-mono text-sm text-blue-400 border border-neutral-800 group-hover:border-blue-500/30 transition-all leading-relaxed break-all">
-                  {scriptTag}
-                </div>
-                <button 
-                  onClick={() => copyToClipboard(scriptTag)}
-                  className={`absolute right-6 top-6 px-8 py-3 rounded-2xl text-xs font-black uppercase tracking-widest text-white shadow-xl active:scale-95 transition-all ${copyStatus === 'copied' ? 'bg-emerald-600' : 'bg-blue-600 hover:bg-blue-500'}`}
-                >
-                  {copyStatus === 'copied' ? 'Success!' : 'Copy Tag'}
-                </button>
-              </div>
-            </section>
-
-            <section className="space-y-8 pb-10">
-              <div className="flex items-center gap-6">
-                <div className="w-14 h-14 bg-emerald-600 rounded-3xl flex items-center justify-center font-bold text-2xl shadow-xl shadow-emerald-600/30">2</div>
-                <div>
-                  <h4 className="text-xl font-bold">Link Any Industry</h4>
-                  <p className="text-gray-500 text-sm">One engine, infinite specialized industries.</p>
-                </div>
-              </div>
-              <div className="ml-20 grid grid-cols-2 gap-6">
-                <div className="p-6 bg-neutral-900/50 border border-neutral-800 rounded-3xl space-y-3">
-                  <div className="w-10 h-10 bg-orange-600/20 rounded-xl flex items-center justify-center text-orange-500">
-                    <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg>
-                  </div>
-                  <h5 className="font-bold">E-Commerce</h5>
-                  <p className="text-xs text-gray-500">Handles complex product queries and checkout assistance.</p>
-                </div>
-                <div className="p-6 bg-neutral-900/50 border border-neutral-800 rounded-3xl space-y-3">
-                  <div className="w-10 h-10 bg-purple-600/20 rounded-xl flex items-center justify-center text-purple-500">
-                    <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" /></svg>
-                  </div>
-                  <h5 className="font-bold">Education</h5>
-                  <p className="text-xs text-gray-500">Provides tutoring and answers math/science inquiries fluently.</p>
-                </div>
-              </div>
-            </section>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
   return (
     <div className="min-h-screen flex flex-col items-center p-4 md:p-8">
-      {showIntegration && <IntegrationDashboard />}
+      {showIntegration && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/98 backdrop-blur-xl">
+           <div className="bg-[#0a0a0a] border border-neutral-800 w-full max-w-4xl rounded-[3rem] p-10 space-y-8">
+              <h3 className="text-3xl font-black">Strategic Tag</h3>
+              <p className="text-gray-400">Deploy this consultant to any web architecture.</p>
+              <div className="bg-neutral-900 p-8 rounded-3xl font-mono text-blue-400 text-sm">
+                 {`<script src="https://sitevoice.io/v1/agent.js" data-site-id="${btoa(websiteData?.url || '').slice(0, 12)}" async></script>`}
+              </div>
+              <button onClick={() => setShowIntegration(false)} className="bg-white text-black px-10 py-4 rounded-2xl font-black uppercase tracking-widest">Close</button>
+           </div>
+        </div>
+      )}
       
       <header className="w-full max-w-5xl flex justify-between items-center mb-12">
         <div className="flex items-center gap-3 cursor-pointer" onClick={resetToHome}>
-          <div className="w-12 h-12 bg-blue-600 rounded-2xl flex items-center justify-center shadow-2xl shadow-blue-900/20">
+          <div className="w-12 h-12 bg-blue-600 rounded-2xl flex items-center justify-center shadow-2xl">
             <svg className="w-7 h-7 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
             </svg>
           </div>
           <h1 className="text-3xl font-black tracking-tighter">SiteVoice</h1>
         </div>
-        <div className="flex items-center gap-4">
-           <div className="flex items-center gap-2 px-4 py-2 bg-neutral-900 border border-neutral-800 rounded-2xl">
-             <span className="w-2.5 h-2.5 bg-blue-500 rounded-full animate-pulse shadow-[0_0_10px_#3b82f6]"></span>
-             <span className="text-[10px] text-gray-300 uppercase tracking-widest font-black">Strategic Core Active</span>
-           </div>
+        <div className="flex items-center gap-2 px-4 py-2 bg-neutral-900 border border-neutral-800 rounded-2xl">
+          <span className="w-2.5 h-2.5 bg-blue-500 rounded-full animate-pulse shadow-[0_0_10px_#3b82f6]"></span>
+          <span className="text-[10px] text-gray-300 uppercase tracking-widest font-black">Core Active</span>
         </div>
       </header>
 
@@ -377,8 +326,8 @@ const App: React.FC = () => {
               <svg className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
             </div>
             <div className="space-y-1">
-              <p className="font-black text-red-500 text-lg uppercase tracking-tight">System Notification</p>
-              <p className="text-red-200/80 leading-relaxed text-sm">{error}</p>
+              <p className="font-black text-red-500 text-sm uppercase tracking-tight">System Notification</p>
+              <p className="text-red-200/80 leading-relaxed text-sm font-medium">{error}</p>
             </div>
             <button onClick={() => setError(null)} className="ml-auto text-red-500 hover:text-red-400 p-2">
                <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
@@ -445,7 +394,7 @@ const App: React.FC = () => {
         {state === AppState.READY && websiteData && (
           <div className="bg-neutral-900/40 border border-neutral-800 p-12 rounded-[3.5rem] space-y-12 animate-in zoom-in-95 duration-500 shadow-2xl">
             <div className="flex items-center gap-8">
-              <div className="w-24 h-24 bg-gradient-to-br from-blue-600 to-blue-800 rounded-[2.5rem] flex items-center justify-center text-5xl font-black shadow-2xl shadow-blue-900/40">
+              <div className="w-24 h-24 bg-gradient-to-br from-blue-600 to-blue-800 rounded-[2.5rem] flex items-center justify-center text-5xl font-black shadow-2xl">
                 {websiteData.name.charAt(0)}
               </div>
               <div>
@@ -456,12 +405,12 @@ const App: React.FC = () => {
 
             <div className="space-y-8">
               <div className="space-y-3">
-                <p className="text-[11px] text-gray-600 uppercase font-black tracking-[0.3em]">Business Intelligence</p>
+                <p className="text-[11px] text-gray-600 uppercase font-black tracking-[0.3em]">Intelligence Brief</p>
                 <p className="text-xl text-gray-200 leading-relaxed font-light italic">"{websiteData.description}"</p>
               </div>
               {groundingLinks.length > 0 && (
                 <div className="space-y-3">
-                  <p className="text-[11px] text-gray-600 uppercase font-black tracking-[0.3em]">Mapping Sources</p>
+                  <p className="text-[11px] text-gray-600 uppercase font-black tracking-[0.3em]">Verified Sources</p>
                   <div className="flex flex-wrap gap-2">
                     {groundingLinks.map((link, idx) => (
                       <a key={idx} href={link.uri} target="_blank" rel="noopener noreferrer" className="text-[10px] bg-neutral-800 hover:bg-neutral-700 px-3 py-1 rounded-full text-blue-400 transition-colors">
@@ -471,27 +420,16 @@ const App: React.FC = () => {
                   </div>
                 </div>
               )}
-              <div className="grid grid-cols-2 gap-10">
-                <div className="space-y-2">
-                  <p className="text-[11px] text-gray-600 uppercase font-black tracking-[0.3em]">Representative Persona</p>
-                  <p className="text-blue-400 font-bold text-lg">Senior {websiteData.tone} Consultant</p>
-                </div>
-                <div className="space-y-2">
-                  <p className="text-[11px] text-gray-600 uppercase font-black tracking-[0.3em]">Mapping Status</p>
-                  <p className="text-emerald-500 font-bold text-lg">Optimized & Linked</p>
-                </div>
-              </div>
             </div>
 
             <div className="flex flex-col gap-6 pt-6">
               <div className="grid grid-cols-2 gap-6">
-                <button onClick={startVoice} className="bg-white text-black py-6 rounded-[2rem] font-black text-xl hover:bg-neutral-100 transition-all active:scale-95 shadow-xl">Voice Consultant</button>
+                <button onClick={startVoice} className="bg-white text-black py-6 rounded-[2rem] font-black text-xl hover:bg-neutral-100 transition-all active:scale-95 shadow-xl">Voice Link</button>
                 <button onClick={startChat} className="bg-neutral-800 text-white py-6 rounded-[2rem] font-black text-xl hover:bg-neutral-700 transition-all border border-neutral-700 active:scale-95">Executive Chat</button>
               </div>
               
-              <button onClick={() => setShowIntegration(true)} className="w-full bg-blue-600 hover:bg-blue-500 text-white py-8 rounded-[2rem] font-black text-2xl flex items-center justify-center gap-4 transition-all shadow-2xl shadow-blue-600/20 active:scale-95">
-                <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                Deploy Professional Agent
+              <button onClick={() => setShowIntegration(true)} className="w-full bg-blue-600 hover:bg-blue-500 text-white py-8 rounded-[2rem] font-black text-2xl flex items-center justify-center gap-4 transition-all shadow-2xl active:scale-95">
+                Deploy Agent
               </button>
 
               <button onClick={resetToHome} className="w-full bg-neutral-900 border border-neutral-800 text-gray-400 py-4 rounded-[1.5rem] font-bold text-sm hover:text-white transition-all active:scale-95">
@@ -503,27 +441,22 @@ const App: React.FC = () => {
 
         {(state === AppState.CONNECTING || state === AppState.CONVERSING) && (
           <div className="flex flex-col flex-grow bg-neutral-900/20 border border-neutral-800 rounded-[3.5rem] overflow-hidden animate-in fade-in zoom-in-95 shadow-2xl">
-            <div className="p-8 bg-neutral-900/60 border-b border-neutral-800 flex justify-between items-center backdrop-blur-3xl">
+            <div className="p-8 bg-neutral-900/60 border-b border-neutral-800 flex justify-between items-center">
               <div className="flex items-center gap-5">
-                <div className="w-14 h-14 bg-neutral-800 rounded-3xl flex items-center justify-center font-black text-2xl text-blue-500 shadow-xl">
+                <div className="w-14 h-14 bg-neutral-800 rounded-3xl flex items-center justify-center font-black text-2xl text-blue-500">
                   {websiteData?.name.charAt(0)}
                 </div>
                 <div>
-                  <h4 className="font-black text-lg">{websiteData?.name} Senior Consultant</h4>
+                  <h4 className="font-black text-lg">{websiteData?.name} Consultant</h4>
                   <div className="flex items-center gap-2">
                     <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
                     <span className="text-[10px] text-gray-500 uppercase font-black tracking-widest">Master Strategy Active</span>
                   </div>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                <button onClick={resetToHome} title="New Analysis" className="w-12 h-12 flex items-center justify-center hover:bg-neutral-800 text-gray-400 rounded-2xl transition-all">
-                  <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" /></svg>
-                </button>
-                <button onClick={stopConversation} className="w-12 h-12 flex items-center justify-center hover:bg-red-500/20 text-red-500 rounded-2xl transition-all">
-                  <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" /></svg>
-                </button>
-              </div>
+              <button onClick={stopConversation} className="w-12 h-12 flex items-center justify-center hover:bg-red-500/20 text-red-500 rounded-2xl transition-all">
+                <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
             </div>
 
             <div className="flex-grow flex flex-col p-10 overflow-hidden relative">
@@ -531,7 +464,6 @@ const App: React.FC = () => {
                 <div className="flex-grow flex flex-col items-center justify-center gap-16">
                   <div className="relative">
                     <div className={`absolute -inset-24 bg-blue-600/10 rounded-full blur-[100px] transition-opacity duration-1000 ${isModelSpeaking ? 'opacity-100' : 'opacity-0'}`}></div>
-                    <div className={`absolute -inset-24 bg-purple-600/10 rounded-full blur-[100px] transition-opacity duration-1000 ${isUserSpeaking ? 'opacity-100' : 'opacity-0'}`}></div>
                     <div className={`relative w-72 h-72 rounded-[4rem] bg-neutral-900/60 border-[8px] border-neutral-800 flex items-center justify-center transition-all duration-700 ${isModelSpeaking ? 'scale-110 border-blue-600 rotate-3 shadow-blue-600/20 shadow-2xl' : isUserSpeaking ? 'scale-105 border-purple-600 -rotate-3 shadow-purple-600/20 shadow-2xl' : 'scale-100'}`}>
                       <Visualizer isSpeaking={isModelSpeaking} isListening={isUserSpeaking} />
                     </div>
