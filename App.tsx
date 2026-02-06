@@ -1,6 +1,6 @@
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { GoogleGenAI, Chat, GenerateContentResponse } from '@google/genai';
+import React, { useState, useEffect, useRef } from 'react';
+import { GoogleGenAI, Chat, GenerateContentResponse, Type } from '@google/genai';
 import { AppState, WebsiteData, TranscriptionEntry, InteractionMode } from './types';
 import { SYSTEM_INSTRUCTION_BASE, PRESET_SITES } from './constants';
 import { VoiceSessionManager } from './services/geminiService';
@@ -19,6 +19,7 @@ const App: React.FC = () => {
   const [isChatLoading, setIsChatLoading] = useState(false);
   const [showIntegration, setShowIntegration] = useState(false);
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied'>('idle');
+  const [groundingLinks, setGroundingLinks] = useState<{title: string, uri: string}[]>([]);
 
   const sessionManager = useRef<VoiceSessionManager | null>(null);
   const chatSession = useRef<Chat | null>(null);
@@ -40,6 +41,7 @@ const App: React.FC = () => {
     setTranscriptions([]);
     setState(AppState.IDLE);
     setError(null);
+    setGroundingLinks([]);
   };
 
   const handleUrlSubmit = async (e: React.FormEvent) => {
@@ -50,41 +52,54 @@ const App: React.FC = () => {
     setError(null);
     setTranscriptions([]);
     setShowIntegration(false);
+    setGroundingLinks([]);
+
+    const apiKey = process.env.API_KEY;
+    if (!apiKey || apiKey === 'undefined') {
+      setError("API_KEY is missing. Please set it in Vercel settings and REDEPLOY.");
+      setState(AppState.IDLE);
+      return;
+    }
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+      const ai = new GoogleGenAI({ apiKey });
       
       const prompt = `CRITICAL: EXECUTE DEEP BUSINESS INTELLIGENCE MAPPING FOR: ${url}.
-      
-      TASK: You are a Senior Business Analyst. Map the entire brand DNA of this website to empower a high-level human-like representative.
-      
-      REQUIRED STRATEGIC DATA:
-      1. Brand Core: What is the primary business value and mission?
-      2. Market Advantage: Why should a customer choose this specific brand over competitors?
-      3. Strategic Facts: What are the specific products, services, or prices mentioned?
-      4. Executive Tone: How should a senior representative of this brand speak (e.g. Expert, Luxury, Friendly)?
-      
-      RETURN JSON ONLY:
-      {
-        "businessName": "Official Brand Name",
-        "description": "Sophisticated executive summary of the business identity",
-        "tone": "Brand voice descriptor",
-        "keyFacts": ["7 detailed strategic selling points and offerings found on the site"]
-      }`;
+      Map the entire brand DNA to empower a high-level human-like representative.`;
 
       const response = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
         contents: prompt,
         config: { 
           responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              businessName: { type: Type.STRING },
+              description: { type: Type.STRING },
+              tone: { type: Type.STRING },
+              keyFacts: { 
+                type: Type.ARRAY,
+                items: { type: Type.STRING }
+              }
+            },
+            required: ["businessName", "description", "tone", "keyFacts"]
+          },
           tools: [{ googleSearch: {} }] 
         }
       });
 
+      // Extract grounding links as per requirements
+      const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+      const links = chunks
+        .filter(c => c.web)
+        .map(c => ({ title: c.web.title, uri: c.web.uri }));
+      setGroundingLinks(links);
+
       const data = JSON.parse(response.text || '{}');
       
       if (!data.businessName || data.businessName.toLowerCase().includes("not found")) {
-        throw new Error("Could not map business DNA from this URL.");
+        throw new Error("Target website could not be mapped. It might be blocking crawlers.");
       }
 
       setWebsiteData({
@@ -95,9 +110,9 @@ const App: React.FC = () => {
         keyFacts: data.keyFacts
       });
       setState(AppState.READY);
-    } catch (err) {
-      console.error(err);
-      setError("Strategic mapping failed. Ensure the URL is public and valid.");
+    } catch (err: any) {
+      console.error("Mapping Error:", err);
+      setError(err.message || "Strategic mapping failed. Check the console for details.");
       setState(AppState.IDLE);
     }
   };
@@ -150,15 +165,15 @@ const App: React.FC = () => {
           }
         },
         (err) => {
-          setError("Connection reset.");
+          setError("Voice session interrupted. Try refreshing.");
           setState(AppState.READY);
         }
       );
       await sessionManager.current.connect(getSystemInstruction());
       setState(AppState.CONVERSING);
-    } catch (err) {
-      setError("Microphone access required.");
-      setState(AppState.IDLE);
+    } catch (err: any) {
+      setError(err.message || "Microphone access or connection failed.");
+      setState(AppState.READY);
     }
   };
 
@@ -219,12 +234,10 @@ const App: React.FC = () => {
 
   const copyToClipboard = async (text: string) => {
     try {
-      // Primary method: Modern Clipboard API
       if (navigator.clipboard && window.isSecureContext) {
         await navigator.clipboard.writeText(text);
         setCopyStatus('copied');
       } else {
-        // Fallback method: ExecCommand
         if (textAreaRef.current) {
           textAreaRef.current.value = text;
           textAreaRef.current.select();
@@ -235,8 +248,6 @@ const App: React.FC = () => {
       setTimeout(() => setCopyStatus('idle'), 2000);
     } catch (err) {
       console.error('Copy failed:', err);
-      // Last resort visual cue
-      alert("Please copy the text manually from the screen.");
     }
   };
 
@@ -304,11 +315,6 @@ const App: React.FC = () => {
                   <p className="text-xs text-gray-500">Provides tutoring and answers math/science inquiries fluently.</p>
                 </div>
               </div>
-              <div className="ml-20 flex justify-center pt-8">
-                <button onClick={() => setShowIntegration(false)} className="bg-white text-black px-16 py-6 rounded-[2rem] font-black text-xl hover:bg-neutral-200 transition-all shadow-2xl active:scale-95">
-                  Confirm Multi-Site Deployment
-                </button>
-              </div>
             </section>
           </div>
         </div>
@@ -330,7 +336,7 @@ const App: React.FC = () => {
           <h1 className="text-3xl font-black tracking-tighter">SiteVoice</h1>
         </div>
         <div className="flex items-center gap-4">
-           {error && <span className="text-red-400 text-xs font-bold bg-red-900/20 px-4 py-2 rounded-xl border border-red-900/50">{error}</span>}
+           {error && <span className="text-red-400 text-xs font-bold bg-red-900/20 px-4 py-2 rounded-xl border border-red-900/50 max-w-xs truncate" title={error}>{error}</span>}
            <div className="flex items-center gap-2 px-4 py-2 bg-neutral-900 border border-neutral-800 rounded-2xl">
              <span className="w-2.5 h-2.5 bg-blue-500 rounded-full animate-pulse shadow-[0_0_10px_#3b82f6]"></span>
              <span className="text-[10px] text-gray-300 uppercase tracking-widest font-black">Strategic Core Active</span>
@@ -410,6 +416,18 @@ const App: React.FC = () => {
                 <p className="text-[11px] text-gray-600 uppercase font-black tracking-[0.3em]">Business Intelligence</p>
                 <p className="text-xl text-gray-200 leading-relaxed font-light italic">"{websiteData.description}"</p>
               </div>
+              {groundingLinks.length > 0 && (
+                <div className="space-y-3">
+                  <p className="text-[11px] text-gray-600 uppercase font-black tracking-[0.3em]">Mapping Sources</p>
+                  <div className="flex flex-wrap gap-2">
+                    {groundingLinks.map((link, idx) => (
+                      <a key={idx} href={link.uri} target="_blank" rel="noopener noreferrer" className="text-[10px] bg-neutral-800 hover:bg-neutral-700 px-3 py-1 rounded-full text-blue-400 transition-colors">
+                        {link.title || 'Source'}
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-10">
                 <div className="space-y-2">
                   <p className="text-[11px] text-gray-600 uppercase font-black tracking-[0.3em]">Representative Persona</p>

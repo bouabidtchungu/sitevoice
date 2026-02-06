@@ -11,19 +11,23 @@ export class VoiceSessionManager {
   private stream: MediaStream | null = null;
   private onMessageCallback: (message: LiveServerMessage) => void;
   private onErrorCallback: (error: any) => void;
+  private apiKey: string;
 
   constructor(
     apiKey: string,
     onMessage: (message: LiveServerMessage) => void,
     onError: (error: any) => void
   ) {
-    this.ai = new GoogleGenAI({ apiKey });
+    this.apiKey = apiKey;
     this.onMessageCallback = onMessage;
     this.onErrorCallback = onError;
   }
 
   async connect(systemInstruction: string) {
     try {
+      // Re-initialize AI client right before use
+      this.ai = new GoogleGenAI({ apiKey: this.apiKey });
+      
       this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       this.inputContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
       this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
@@ -164,14 +168,11 @@ export class VoiceSessionManager {
   }
 
   disconnect() {
-    if (this.session) {
-      // In a real environment, this might call session.close()
-    }
     this.stopAllAudio();
     if (this.stream) {
       this.stream.getTracks().forEach(track => track.stop());
     }
-    if (this.inputContext) this.inputContext.close();
-    if (this.audioContext) this.audioContext.close();
+    if (this.inputContext && this.inputContext.state !== 'closed') this.inputContext.close();
+    if (this.audioContext && this.audioContext.state !== 'closed') this.audioContext.close();
   }
 }
